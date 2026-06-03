@@ -71,9 +71,14 @@ If you want to be the first to know when it ships, drop your email here: *(comin
 
 ## Building it yourself
 
-You'll need Flutter (`^3.11.5`) and Xcode.
+You'll need Flutter (`^3.11.5`), Xcode, and the [`antigravity-usage`](https://github.com/) CLI on your `PATH`.
 
 ```bash
+# 1. Install + auth the cloud quota CLI (one-time)
+brew install antigravity-usage    # or however you distribute it
+antigravity-usage login           # opens browser for OAuth
+
+# 2. Build the menu bar app
 git clone https://github.com/<you>/antigravity_quota_app.git
 cd antigravity_quota_app
 flutter pub get
@@ -81,7 +86,12 @@ flutter build macos --release
 open build/macos/Build/Products/Release/antigravity_quota_app.app
 ```
 
-The app sandbox is intentionally **disabled** — it shells out to `ps` and `lsof` to find the Antigravity server. That's also why it ships outside the Mac App Store.
+The app sandbox is intentionally **disabled** — it shells out to `antigravity-usage`, `ps` and `lsof`. That's also why it ships outside the Mac App Store.
+
+### Data sources
+
+- **Cloud** (always): `antigravity-usage --method google --json` → per-model quota %.
+- **Local** (only when the IDE is running): the Antigravity language server on `127.0.0.1` → AI Credits balance. Errors here are silent; the UI just hides the credits row.
 
 ## License
 

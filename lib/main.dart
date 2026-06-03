@@ -6,12 +6,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+import 'providers/auth_provider.dart';
 import 'providers/quota_provider.dart';
-import 'providers/gemini_provider.dart';
 import 'providers/navigation_provider.dart';
-import 'services/antigravity_service.dart';
+import 'services/auth_service.dart';
 import 'services/database_service.dart';
-import 'services/gemini_cli_service.dart';
+import 'services/quota_cache.dart';
+import 'services/quota_service.dart';
 import 'ui/popover_screen.dart';
 import 'ui/dashboard_screen.dart';
 
@@ -37,13 +38,16 @@ void main() async {
   final db = DatabaseService();
   await db.init();
 
+  final cache = QuotaCache(db);
+  final quota = QuotaProvider(QuotaService(), db, cache);
+  final auth = AuthProvider(AuthService());
+  auth.addListener(() => quota.onAuthChanged(auth.isAuthenticated));
+
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(
-            create: (_) => QuotaProvider(AntigravityService(), db)),
-        ChangeNotifierProvider(
-            create: (_) => GeminiProvider(GeminiCliService())),
+        ChangeNotifierProvider.value(value: quota),
+        ChangeNotifierProvider.value(value: auth),
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
       ],
       child: const _App(),
@@ -51,11 +55,10 @@ void main() async {
   );
 }
 
-/// Draws a circular progress ring for the macOS menu bar.
-/// [usedFraction] 0.0 = empty, 1.0 = full. Uses a white template image
-/// so macOS inverts it automatically for light/dark menu bars.
+// Renders a circular progress ring as a template PNG for the macOS menu bar.
+// usedFraction 0.0 = empty, 1.0 = full. White pixels; macOS inverts for theme.
 Future<String> _buildProgressIcon(double usedFraction) async {
-  const int px = 36; // 18 pt @2x retina
+  const int px = 36;
   const double cx = px / 2;
   const double cy = px / 2;
   const double outerR = cx - 2.5;
@@ -65,24 +68,21 @@ Future<String> _buildProgressIcon(double usedFraction) async {
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, px.toDouble(), px.toDouble()));
 
   final trackPaint = Paint()
-    ..color = const Color(0x44FFFFFF) // dim white track
+    ..color = const Color(0x44FFFFFF)
     ..strokeWidth = strokeW
     ..style = PaintingStyle.stroke
     ..strokeCap = StrokeCap.round;
 
   final fillPaint = Paint()
-    ..color = const Color(0xFFFFFFFF) // solid white arc
+    ..color = const Color(0xFFFFFFFF)
     ..strokeWidth = strokeW
     ..style = PaintingStyle.stroke
     ..strokeCap = StrokeCap.round;
 
   final bounds = Rect.fromCircle(center: const Offset(cx, cy), radius: outerR);
-
-  // Background track
   canvas.drawArc(bounds, 0, 2 * pi, false, trackPaint);
 
-  // Progress arc — start at top (−π/2), sweep clockwise
-  final sweep = (2 * pi * usedFraction.clamp(0.0, 1.0));
+  final sweep = 2 * pi * usedFraction.clamp(0.0, 1.0);
   if (sweep > 0.01) {
     canvas.drawArc(bounds, -pi / 2, sweep, false, fillPaint);
   }
@@ -115,6 +115,8 @@ class _AppState extends State<_App> with TrayListener, WindowListener {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<QuotaProvider>().addListener(_onQuotaChanged);
       context.read<NavigationProvider>().addListener(_onNavigationChanged);
+      context.read<AuthProvider>().addListener(_onAuthChanged);
+      _updateContextMenu(); // initial render once providers are ready
     });
   }
 
@@ -137,27 +139,31 @@ class _AppState extends State<_App> with TrayListener, WindowListener {
   }
 
   Future<void> _updateContextMenu() async {
+    final isAuth = mounted
+        ? context.read<AuthProvider>().isAuthenticated
+        : false;
     await trayManager.setContextMenu(Menu(
       items: [
-        MenuItem(key: 'refresh', label: 'Refresh Now'),
+        if (isAuth) ...[
+          MenuItem(key: 'refresh', label: 'Refresh Now'),
+          MenuItem(key: 'logout', label: 'Cerrar sesión'),
+        ] else
+          MenuItem(key: 'login', label: 'Iniciar sesión'),
         MenuItem.separator(),
         MenuItem(key: 'quit', label: 'Quit Antigravity Quota'),
       ],
     ));
   }
 
+  void _onAuthChanged() => _updateContextMenu();
+
   void _onQuotaChanged() {
     final data = context.read<QuotaProvider>().currentData;
-    final worst = data?.mostConstrained;
-    final used = worst?.usedFraction ?? 0.0;
-    final pct = worst?.usedPercent ?? 0;
-
+    final pct = data?.mostConstrained?.usedPercent ?? 0;
+    final used = (pct / 100).clamp(0.0, 1.0);
     _buildProgressIcon(used).then((path) {
       trayManager.setIcon(path, isTemplate: true);
       trayManager.setTitle(pct > 0 ? ' $pct%' : '');
-    }).catchError((Object e) {
-      debugPrint('Tray icon update error: $e');
-      return null;
     });
   }
 
@@ -172,6 +178,10 @@ class _AppState extends State<_App> with TrayListener, WindowListener {
     switch (menuItem.key) {
       case 'refresh':
         if (mounted) context.read<QuotaProvider>().refresh();
+      case 'login':
+        if (mounted) context.read<AuthProvider>().login();
+      case 'logout':
+        if (mounted) context.read<AuthProvider>().logout();
       case 'quit':
         await trayManager.destroy();
         await windowManager.close();

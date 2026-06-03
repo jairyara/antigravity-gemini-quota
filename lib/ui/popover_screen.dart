@@ -1,23 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/model_quota.dart';
 import '../models/quota_data.dart';
+import '../providers/auth_provider.dart';
 import '../providers/quota_provider.dart';
-import '../providers/gemini_provider.dart';
 import '../providers/navigation_provider.dart';
-import 'tabs/gemini_tab.dart';
+import '../util/reset_time_formatter.dart';
 import 'widgets/activity_grid.dart';
 
-enum _Tab { antigravity, gemini }
-
-class PopoverScreen extends StatefulWidget {
+class PopoverScreen extends StatelessWidget {
   const PopoverScreen({super.key});
-
-  @override
-  State<PopoverScreen> createState() => _PopoverScreenState();
-}
-
-class _PopoverScreenState extends State<PopoverScreen> {
-  _Tab _tab = _Tab.antigravity;
 
   @override
   Widget build(BuildContext context) {
@@ -41,10 +33,9 @@ class _PopoverScreenState extends State<PopoverScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _buildHeader(),
-              _buildTabBar(),
+              _buildHeader(context),
               const Divider(height: 1, color: Color(0xFF252525)),
-              Expanded(child: _buildBody()),
+              const Expanded(child: _PopoverBody()),
               _buildFooter(),
             ],
           ),
@@ -53,10 +44,11 @@ class _PopoverScreenState extends State<PopoverScreen> {
     );
   }
 
-  Widget _buildHeader() {
-    return Consumer<QuotaProvider>(
-      builder: (context, provider, _) {
-        final data = provider.currentData;
+  Widget _buildHeader(BuildContext context) {
+    return Consumer2<QuotaProvider, AuthProvider>(
+      builder: (context, quota, auth, _) {
+        final data = quota.currentData;
+        final showActions = auth.isAuthenticated && !auth.isLoggingIn;
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 14, 10),
           child: Row(
@@ -70,41 +62,28 @@ class _PopoverScreenState extends State<PopoverScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              if (data != null)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2A2A2A),
-                    borderRadius: BorderRadius.circular(5),
-                    border: Border.all(color: const Color(0xFF3A3A3A)),
-                  ),
-                  child: Text(
-                    data.tierDisplayName,
-                    style: const TextStyle(
-                      color: Color(0xFFAAAAAA),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
+              if (data != null && data.isStale)
+                _StaleBadge(fetchedAt: data.fetchedAt),
               const Spacer(),
-              GestureDetector(
-                onTap: () => context.read<NavigationProvider>().openDashboard(),
-                child: const Icon(Icons.bar_chart_rounded,
-                    color: Color(0xFF888888), size: 16),
-              ),
-              const SizedBox(width: 10),
-              GestureDetector(
-                onTap: _onRefresh,
-                child: Icon(
-                  Icons.refresh,
-                  color: provider.isLoading
-                      ? const Color(0xFF444444)
-                      : const Color(0xFF888888),
-                  size: 16,
+              if (showActions) ...[
+                GestureDetector(
+                  onTap: () =>
+                      context.read<NavigationProvider>().openDashboard(),
+                  child: const Icon(Icons.bar_chart_rounded,
+                      color: Color(0xFF888888), size: 16),
                 ),
-              ),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: () => _onRefresh(context),
+                  child: Icon(
+                    Icons.refresh,
+                    color: quota.isLoading
+                        ? const Color(0xFF444444)
+                        : const Color(0xFF888888),
+                    size: 16,
+                  ),
+                ),
+              ],
             ],
           ),
         );
@@ -112,55 +91,15 @@ class _PopoverScreenState extends State<PopoverScreen> {
     );
   }
 
-  void _onRefresh() {
-    if (_tab == _Tab.antigravity) {
-      context.read<QuotaProvider>().refresh();
-    } else {
-      context.read<GeminiProvider>().refresh();
-    }
-  }
-
-  Widget _buildTabBar() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      child: Container(
-        height: 28,
-        decoration: BoxDecoration(
-          color: const Color(0xFF252525),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            _TabButton(
-              label: 'Antigravity',
-              selected: _tab == _Tab.antigravity,
-              onTap: () => setState(() => _tab = _Tab.antigravity),
-            ),
-            _TabButton(
-              label: 'Gemini CLI',
-              selected: _tab == _Tab.gemini,
-              onTap: () => setState(() => _tab = _Tab.gemini),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBody() {
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 150),
-      child: _tab == _Tab.antigravity
-          ? _AntigravityTab(key: const ValueKey('ag'))
-          : const GeminiTab(key: ValueKey('gemini')),
-    );
+  void _onRefresh(BuildContext context) {
+    context.read<QuotaProvider>().refresh();
   }
 
   Widget _buildFooter() {
-    return Consumer<QuotaProvider>(
-      builder: (context, provider, _) {
-        final lastFetched = provider.lastFetched;
-        final data = provider.currentData;
+    return Consumer2<QuotaProvider, AuthProvider>(
+      builder: (context, quota, auth, _) {
+        final lastFetched = quota.lastFetched;
+        final email = auth.status?.email;
         return Container(
           decoration: BoxDecoration(
             border: Border(
@@ -171,22 +110,36 @@ class _PopoverScreenState extends State<PopoverScreen> {
               const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
             children: [
-              Text(
-                data?.email ?? '',
-                style:
-                    const TextStyle(color: Color(0xFF555555), fontSize: 11),
-                overflow: TextOverflow.ellipsis,
-              ),
-              const Spacer(),
-              if (provider.isLoading)
-                const SizedBox(
-                  width: 10,
-                  height: 10,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    color: Color(0xFF555555),
+              if (auth.isAuthenticated && email != null) ...[
+                Flexible(
+                  child: Text(
+                    email,
+                    style: const TextStyle(
+                        color: Color(0xFF555555), fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                )
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: auth.isLoggingOut
+                      ? null
+                      : () => context.read<AuthProvider>().logout(),
+                  child: Text(
+                    auth.isLoggingOut ? 'saliendo…' : 'cerrar sesión',
+                    style: const TextStyle(
+                      color: Color(0xFF888888),
+                      fontSize: 11,
+                      decoration: TextDecoration.underline,
+                      decorationColor: Color(0xFF555555),
+                    ),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              if (quota.isLoading && quota.currentData == null)
+                const Text('cargando…',
+                    style:
+                        TextStyle(color: Color(0xFF555555), fontSize: 11))
               else if (lastFetched != null)
                 Text(
                   _relativeTime(lastFetched),
@@ -208,71 +161,222 @@ class _PopoverScreenState extends State<PopoverScreen> {
   }
 }
 
-// ─── Tab button ───────────────────────────────────────────────────────────────
-
-class _TabButton extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _TabButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
+class _StaleBadge extends StatelessWidget {
+  final DateTime fetchedAt;
+  const _StaleBadge({required this.fetchedAt});
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          alignment: Alignment.center,
-          margin: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            color: selected ? const Color(0xFF3A3A3A) : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: selected ? Colors.white : const Color(0xFF666666),
-              fontSize: 11,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-            ),
-          ),
+    final diff = DateTime.now().difference(fetchedAt);
+    final ago = diff.inMinutes < 1
+        ? '<1m'
+        : diff.inMinutes < 60
+            ? '${diff.inMinutes}m'
+            : '${diff.inHours}h';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A2A),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      child: Text(
+        'datos de hace $ago',
+        style: const TextStyle(
+          color: Color(0xFF888888),
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
         ),
       ),
     );
   }
 }
 
-// ─── Antigravity tab ──────────────────────────────────────────────────────────
+// ─── Body switch (auth-gated) ─────────────────────────────────────────────────
+
+class _PopoverBody extends StatelessWidget {
+  const _PopoverBody();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AuthProvider>(
+      builder: (context, auth, _) {
+        if (auth.status == null && auth.isCheckingStatus) {
+          return const _AuthCheckingScreen();
+        }
+        if (auth.isLoggingIn) return const _LoggingInScreen();
+        if (!auth.isAuthenticated) return const _LoginScreen();
+        return const _AntigravityTab();
+      },
+    );
+  }
+}
+
+class _AuthCheckingScreen extends StatelessWidget {
+  const _AuthCheckingScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: SizedBox(
+        width: 14,
+        height: 14,
+        child: CircularProgressIndicator(
+          strokeWidth: 1.5,
+          color: Color(0xFF555555),
+        ),
+      ),
+    );
+  }
+}
+
+class _LoginScreen extends StatelessWidget {
+  const _LoginScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(Icons.lock_outline,
+                size: 28, color: Color(0xFF666666)),
+            const SizedBox(height: 14),
+            const Text(
+              'Inicia sesión para ver tu quota',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Se abrirá tu navegador para autenticarte con Google.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF888888), fontSize: 11),
+            ),
+            const SizedBox(height: 18),
+            GestureDetector(
+              onTap: () => context.read<AuthProvider>().login(),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 9),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0A84FF),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'Iniciar sesión con Google',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LoggingInScreen extends StatelessWidget {
+  const _LoggingInScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.8,
+                  color: Color(0xFF888888),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Esperando autenticación…',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Completa el flujo en tu navegador.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF888888), fontSize: 11),
+            ),
+            const SizedBox(height: 18),
+            GestureDetector(
+              onTap: () => context.read<AuthProvider>().cancelLogin(),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A2A),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF3A3A3A)),
+                ),
+                child: const Text(
+                  'Cancelar',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFFAAAAAA),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Content ──────────────────────────────────────────────────────────────────
 
 class _AntigravityTab extends StatelessWidget {
-  const _AntigravityTab({super.key});
+  const _AntigravityTab();
 
   @override
   Widget build(BuildContext context) {
     return Consumer<QuotaProvider>(
       builder: (context, provider, _) {
-        final data = provider.currentData;
-        if (!provider.isLoading && data == null) {
-          return _disconnected(provider.error);
-        }
+        final QuotaData? data = provider.currentData;
+
+        // First load, nothing cached: skeleton.
+        if (data == null) return const _Skeleton();
+
         return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (data != null) ...[
-                _CreditsSummary(data: data),
-                const SizedBox(height: 14),
-                const _SectionLabel('Models'),
-                const SizedBox(height: 8),
-                ...data.modelQuotas.map((m) => _ModelRow(model: m)),
-                const SizedBox(height: 14),
-              ],
+              const SizedBox(height: 4),
+              const _SectionLabel('Models'),
+              const SizedBox(height: 8),
+              ...data.models.map((m) => _ModelRow(model: m)),
+              const SizedBox(height: 14),
               const _SectionLabel('Activity'),
               const SizedBox(height: 8),
               ActivityGrid(activityCounts: provider.activityCounts),
@@ -283,187 +387,34 @@ class _AntigravityTab extends StatelessWidget {
       },
     );
   }
+}
 
-  Widget _disconnected(String? error) {
+class _Skeleton extends StatelessWidget {
+  const _Skeleton();
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF241A1A),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF3A2020)),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.warning_amber_rounded,
-                color: Color(0xFFFF453A), size: 16),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                error ?? 'Antigravity not running',
-                style:
-                    const TextStyle(color: Color(0xFFFF453A), fontSize: 12),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Credits ──────────────────────────────────────────────────────────────────
-
-class _CreditsSummary extends StatelessWidget {
-  final QuotaData data;
-  const _CreditsSummary({required this.data});
-
-  @override
-  Widget build(BuildContext context) {
-    final promptUsed = data.monthlyPromptCredits > 0
-        ? 1.0 -
-            (data.availablePromptCredits / data.monthlyPromptCredits)
-                .clamp(0.0, 1.0)
-        : 0.0;
-    final flowUsed = data.monthlyFlowCredits > 0
-        ? 1.0 -
-            (data.availableFlowCredits / data.monthlyFlowCredits)
-                .clamp(0.0, 1.0)
-        : 0.0;
-
-    return Column(
-      children: [
-        _CreditBar(
-          label: 'Prompt Credits',
-          value: data.promptCreditsLabel,
-          used: promptUsed,
-          color: const Color(0xFF0A84FF),
-          tooltip: 'AI prompts for Gemini chat,\nCascade sessions and code assistance.',
-        ),
-        const SizedBox(height: 8),
-        _CreditBar(
-          label: 'Flow Credits',
-          value: data.flowCreditsLabel,
-          used: flowUsed,
-          color: const Color(0xFF30D158),
-          tooltip: 'Google Flow — AI video generation\n(text, ingredients or frames to video).',
-        ),
-        const SizedBox(height: 10),
-        _AiCreditsRow(credits: data.availableAiCredits, label: data.aiCreditsLabel),
-      ],
-    );
-  }
-}
-
-class _CreditBar extends StatelessWidget {
-  final String label;
-  final String value;
-  final double used;
-  final Color color;
-  final String tooltip;
-
-  const _CreditBar({
-    required this.label,
-    required this.value,
-    required this.used,
-    required this.color,
-    required this.tooltip,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Tooltip(
-              message: tooltip,
-              preferBelow: true,
-              textStyle: const TextStyle(
-                color: Color(0xFFDDDDDD),
-                fontSize: 11,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2C2C2E),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(label,
-                      style: const TextStyle(
-                          color: Color(0xFF888888), fontSize: 11)),
-                  const SizedBox(width: 3),
-                  const Icon(Icons.info_outline,
-                      size: 10, color: Color(0xFF555555)),
-                ],
-              ),
-            ),
-            const Spacer(),
-            Text(value,
-                style: const TextStyle(
-                    color: Color(0xFF666666), fontSize: 11)),
-          ],
-        ),
-        const SizedBox(height: 4),
-        _ProgressBar(fraction: used, color: color),
-      ],
-    );
-  }
-}
-
-// ─── AI Credits row ───────────────────────────────────────────────────────────
-
-class _AiCreditsRow extends StatelessWidget {
-  final int credits;
-  final String label;
-  const _AiCreditsRow({required this.credits, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final low = credits < 100;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: const Color(0xFF232323),
-        borderRadius: BorderRadius.circular(7),
-        border: Border.all(
-          color: low ? const Color(0xFF3A2A1A) : const Color(0xFF2E2E2E),
-        ),
-      ),
-      child: Row(
-        children: [
-          Tooltip(
-            message: 'Google One AI credits — shared across\nFlow (video) and Antigravity model overages.',
-            textStyle: const TextStyle(color: Color(0xFFDDDDDD), fontSize: 11),
-            decoration: BoxDecoration(
-              color: const Color(0xFF2C2C2E),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: List.generate(
+          4,
+          (_) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Available AI Credits',
-                  style: TextStyle(color: Color(0xFF888888), fontSize: 11),
-                ),
-                const SizedBox(width: 3),
-                const Icon(Icons.info_outline, size: 10, color: Color(0xFF555555)),
+                Container(
+                    height: 10,
+                    width: 140,
+                    color: const Color(0xFF252525)),
+                const SizedBox(height: 6),
+                Container(height: 5, color: const Color(0xFF252525)),
               ],
             ),
           ),
-          const Spacer(),
-          Text(
-            label,
-            style: TextStyle(
-              color: low ? const Color(0xFFFF9F0A) : Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -517,14 +468,11 @@ class _ModelRow extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           _ProgressBar(fraction: model.usedFraction, color: barColor),
-          if (pct > 0) ...[
-            const SizedBox(height: 3),
-            Text(
-              model.resetLabel,
-              style:
-                  const TextStyle(color: Color(0xFF555555), fontSize: 10),
-            ),
-          ],
+          const SizedBox(height: 3),
+          Text(
+            formatResetTime(model.resetTime),
+            style: const TextStyle(color: Color(0xFF555555), fontSize: 10),
+          ),
         ],
       ),
     );

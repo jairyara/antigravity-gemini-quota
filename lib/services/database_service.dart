@@ -3,7 +3,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/snapshot.dart';
 import '../models/insights_data.dart';
-import '../models/quota_data.dart';
+import '../models/model_quota.dart';
 
 class DatabaseService {
   Database? _db;
@@ -17,7 +17,7 @@ class DatabaseService {
 
     _db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE snapshots (
@@ -40,6 +40,13 @@ class DatabaseService {
             reset_time TEXT NOT NULL
           )
         ''');
+        await db.execute('''
+          CREATE TABLE cloud_cache (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            fetched_at TEXT NOT NULL,
+            raw_json TEXT NOT NULL
+          )
+        ''');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -50,6 +57,15 @@ class DatabaseService {
               model_label TEXT NOT NULL,
               remaining_fraction REAL NOT NULL,
               reset_time TEXT NOT NULL
+            )
+          ''');
+        }
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS cloud_cache (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              fetched_at TEXT NOT NULL,
+              raw_json TEXT NOT NULL
             )
           ''');
         }
@@ -68,11 +84,33 @@ class DatabaseService {
       batch.insert('model_snapshots', {
         'timestamp': now,
         'model_label': m.label,
-        'remaining_fraction': m.remainingFraction,
+        'remaining_fraction': m.remainingPercentage,
         'reset_time': m.resetTime.toIso8601String(),
       });
     }
     await batch.commit(noResult: true);
+  }
+
+  Future<void> saveCloudCache(String rawJson, DateTime fetchedAt) async {
+    await _db!.insert(
+      'cloud_cache',
+      {
+        'id': 1,
+        'fetched_at': fetchedAt.toIso8601String(),
+        'raw_json': rawJson,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<({String rawJson, DateTime fetchedAt})?> loadCloudCache() async {
+    final rows = await _db!.query('cloud_cache', where: 'id = 1', limit: 1);
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return (
+      rawJson: row['raw_json'] as String,
+      fetchedAt: DateTime.parse(row['fetched_at'] as String),
+    );
   }
 
   Future<Map<String, int>> getDailyActivityCounts({int days = 364}) async {
