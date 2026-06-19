@@ -500,7 +500,9 @@ class _ProgressBar extends StatelessWidget {
           ),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: Container(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.easeOut,
               height: 5,
               width: filled,
               decoration: BoxDecoration(

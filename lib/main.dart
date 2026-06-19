@@ -55,36 +55,42 @@ void main() async {
   );
 }
 
-// Renders a circular progress ring as a template PNG for the macOS menu bar.
-// usedFraction 0.0 = empty, 1.0 = full. White pixels; macOS inverts for theme.
-Future<String> _buildProgressIcon(double usedFraction) async {
-  const int px = 36;
-  const double cx = px / 2;
-  const double cy = px / 2;
-  const double outerR = cx - 2.5;
-  const double strokeW = 4.0;
-
+// Renders two vertical progress bars as a template PNG for the macOS menu bar.
+// White pixels; macOS inverts for theme.
+Future<String> _buildProgressIcon(double generalUsed, double geminiUsed) async {
+  const int px = 36; 
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, px.toDouble(), px.toDouble()));
 
   final trackPaint = Paint()
     ..color = const Color(0x44FFFFFF)
-    ..strokeWidth = strokeW
+    ..strokeWidth = 8.0
     ..style = PaintingStyle.stroke
     ..strokeCap = StrokeCap.round;
 
   final fillPaint = Paint()
     ..color = const Color(0xFFFFFFFF)
-    ..strokeWidth = strokeW
+    ..strokeWidth = 8.0
     ..style = PaintingStyle.stroke
     ..strokeCap = StrokeCap.round;
 
-  final bounds = Rect.fromCircle(center: const Offset(cx, cy), radius: outerR);
-  canvas.drawArc(bounds, 0, 2 * pi, false, trackPaint);
+  const double paddingY = 4.0;
+  const double barHeight = px - paddingY * 2;
+  
+  // Left bar (Claude/General)
+  const double leftX = 10.0;
+  canvas.drawLine(const Offset(leftX, px - paddingY), const Offset(leftX, paddingY), trackPaint);
+  if (generalUsed > 0.01) {
+    final fillY = (px - paddingY) - (barHeight * generalUsed.clamp(0.0, 1.0));
+    canvas.drawLine(const Offset(leftX, px - paddingY), Offset(leftX, fillY), fillPaint);
+  }
 
-  final sweep = 2 * pi * usedFraction.clamp(0.0, 1.0);
-  if (sweep > 0.01) {
-    canvas.drawArc(bounds, -pi / 2, sweep, false, fillPaint);
+  // Right bar (Gemini)
+  const double rightX = 26.0;
+  canvas.drawLine(const Offset(rightX, px - paddingY), const Offset(rightX, paddingY), trackPaint);
+  if (geminiUsed > 0.01) {
+    final fillY = (px - paddingY) - (barHeight * geminiUsed.clamp(0.0, 1.0));
+    canvas.drawLine(const Offset(rightX, px - paddingY), Offset(rightX, fillY), fillPaint);
   }
 
   final picture = recorder.endRecording();
@@ -129,7 +135,7 @@ class _AppState extends State<_App> with TrayListener, WindowListener {
 
   Future<void> _initTray() async {
     try {
-      final iconPath = await _buildProgressIcon(0.0);
+      final iconPath = await _buildProgressIcon(0.0, 0.0);
       await trayManager.setIcon(iconPath, isTemplate: true);
       await trayManager.setToolTip('Antigravity Quota');
       await _updateContextMenu();
@@ -159,11 +165,33 @@ class _AppState extends State<_App> with TrayListener, WindowListener {
 
   void _onQuotaChanged() {
     final data = context.read<QuotaProvider>().currentData;
-    final pct = data?.mostConstrained?.usedPercent ?? 0;
-    final used = (pct / 100).clamp(0.0, 1.0);
-    _buildProgressIcon(used).then((path) {
+    
+    double generalUsed = 0.0;
+    double geminiUsed = 0.0;
+    
+    if (data != null && data.models.isNotEmpty) {
+      final geminiModels = data.models.where((m) => m.modelId.toLowerCase().contains('gemini'));
+      final generalModels = data.models.where((m) => !m.modelId.toLowerCase().contains('gemini'));
+      
+      if (geminiModels.isNotEmpty) {
+        geminiUsed = geminiModels.map((m) => m.usedFraction).reduce(max);
+      }
+      if (generalModels.isNotEmpty) {
+        generalUsed = generalModels.map((m) => m.usedFraction).reduce(max);
+      }
+    }
+
+    _buildProgressIcon(generalUsed, geminiUsed).then((path) {
       trayManager.setIcon(path, isTemplate: true);
-      trayManager.setTitle(pct > 0 ? ' $pct%' : '');
+      
+      final int genPct = (generalUsed * 100).round();
+      final int gemPct = (geminiUsed * 100).round();
+      
+      if (genPct > 0 || gemPct > 0) {
+        trayManager.setTitle(' C:$genPct% G:$gemPct%');
+      } else {
+        trayManager.setTitle('');
+      }
     });
   }
 

@@ -17,6 +17,23 @@ class QuotaData {
   ModelQuota? get mostConstrained =>
       models.isEmpty ? null : models.first;
 
+  /// Merges [freshModels] into [existing], keyed by label.
+  /// Fresh models overwrite existing ones; models present only in [existing]
+  /// are retained so switching the active model doesn't erase unrelated pools.
+  static List<ModelQuota> mergeModels(
+    List<ModelQuota> existing,
+    List<ModelQuota> freshModels,
+  ) {
+    final map = <String, ModelQuota>{
+      for (final m in existing) m.label: m,
+    };
+    for (final m in freshModels) {
+      map[m.label] = m;
+    }
+    return map.values.toList()
+      ..sort((a, b) => a.remainingPercentage.compareTo(b.remainingPercentage));
+  }
+
   QuotaData copyWith({
     List<ModelQuota>? models,
     PromptCredits? credits,

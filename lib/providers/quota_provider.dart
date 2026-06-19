@@ -77,9 +77,17 @@ class QuotaProvider extends ChangeNotifier {
 
     try {
       final fresh = await _service.fetch();
-      _data = fresh;
-      await _cache.save(fresh, jsonEncode(_serializeForCache(fresh)));
-      await _persistActivity(fresh);
+
+      // Merge fresh models with the previously known set so that switching
+      // the active model (Opus → 3.5 → Flash) does NOT erase the quota
+      // state of models that weren't included in this fetch.
+      final mergedModels = _data != null
+          ? QuotaData.mergeModels(_data!.models, fresh.models)
+          : fresh.models;
+
+      _data = fresh.copyWith(models: mergedModels);
+      await _cache.save(_data!, jsonEncode(_serializeForCache(_data!)));
+      await _persistActivity(_data!);
     } on QuotaException catch (e) {
       debugPrint('quota fetch failed: $e');
       _data = _data?.copyWith(isStale: true);

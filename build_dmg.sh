@@ -1,25 +1,48 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 APP_NAME="Antigravity Usage"
 RELEASE_DIR="build/macos/Build/Products/Release"
 APP_PATH="${RELEASE_DIR}/${APP_NAME}.app"
 DMG_PATH="${RELEASE_DIR}/${APP_NAME}.dmg"
 TEMP_DIR="build/dmg_temp"
+ENTITLEMENTS="macos/Runner/Release.entitlements"
 
 echo "🔨 1. Compilando la aplicación en modo Release..."
 flutter build macos --release
 
-echo "🔏 2. Re-firmando el .app en profundidad (ad-hoc)..."
-# Firma profunda: frameworks + ejecutable principal. Evita que macOS lo marque como roto
-# al moverlo entre máquinas o tras pasar por el DMG.
-codesign --force --deep --sign - "$APP_PATH"
-
-echo "🧼 3. Quitando atributos de cuarentena del .app..."
+echo "🧼 2. Quitando atributos de cuarentena ANTES de firmar..."
 xattr -cr "$APP_PATH" || true
 
-echo "📂 4. Preparando el entorno para el instalador..."
+echo "🔏 3. Firmando ad-hoc de adentro hacia afuera..."
+# IMPORTANTE: NO usar `codesign --deep` para firmar. Apple lo desaconseja y con
+# apps Flutter (múltiples frameworks anidados) deja el sello de App.framework
+# inválido → la app pasa la verificación local pero macOS la mata al abrirla
+# desde /Applications. La forma correcta es firmar inside-out: primero cada
+# binario/framework anidado, y el bundle .app al final.
+
+# 3a. Binarios Mach-O sueltos dentro de Frameworks (dylibs, helpers).
+find "$APP_PATH/Contents/Frameworks" -type f \( -name "*.dylib" -o -perm +111 \) 2>/dev/null | while read -r f; do
+  if file "$f" | grep -q "Mach-O"; then
+    codesign --force --timestamp=none --sign - "$f"
+  fi
+done
+
+# 3b. Cada .framework como bundle.
+for fw in "$APP_PATH/Contents/Frameworks/"*.framework; do
+  [ -d "$fw" ] && codesign --force --timestamp=none --sign - "$fw"
+done
+
+# 3c. Ejecutable principal y, por último, el bundle .app con entitlements.
+codesign --force --timestamp=none --sign - "$APP_PATH/Contents/MacOS/"* 2>/dev/null || true
+codesign --force --timestamp=none --entitlements "$ENTITLEMENTS" --sign - "$APP_PATH"
+
+echo "✅ 4. Verificando la firma (falla aquí si quedó inválida)..."
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+echo "   Firma válida."
+
+echo "📂 5. Preparando el entorno para el instalador..."
 rm -rf "$TEMP_DIR"
 rm -f "$DMG_PATH"
 mkdir -p "$TEMP_DIR"
@@ -33,23 +56,20 @@ Antigravity Usage — Instalación
 ================================
 
 1. Arrastra "Antigravity Usage.app" a la carpeta Applications.
-2. Abre la Terminal y ejecuta UNA sola vez:
-
-   xattr -dr com.apple.quarantine "/Applications/Antigravity Usage.app"
-
-3. Ahora puedes abrir la app normalmente desde Launchpad o Applications.
+2. La PRIMERA vez, haz clic derecho sobre la app → "Abrir" → "Abrir".
+   (O en Terminal, una sola vez:
+    xattr -dr com.apple.quarantine "/Applications/Antigravity Usage.app")
+3. A partir de ahí se abre normal desde Launchpad o Applications.
 
 ¿Por qué este paso extra?
 La app está firmada ad-hoc (sin Developer ID de Apple). macOS le añade
-el atributo de cuarentena al instalarla desde un DMG y Gatekeeper la
-bloquea. El comando de arriba quita esa marca solo para esta app.
+cuarentena al descargarla y Gatekeeper pide confirmación la primera vez.
+La app NO tiene icono en el Dock: vive en la barra de menú (arriba a la
+derecha).
 EOF
 
-echo "💿 5. Creando el instalador DMG..."
+echo "💿 6. Creando el instalador DMG..."
 hdiutil create -fs HFS+ -srcfolder "$TEMP_DIR" -volname "$APP_NAME" "$DMG_PATH"
-
-echo "🧼 6. Quitando atributos de cuarentena del .dmg..."
-xattr -cr "$DMG_PATH" || true
 
 echo "🧹 7. Limpiando archivos temporales..."
 rm -rf "$TEMP_DIR"
@@ -61,8 +81,6 @@ echo ""
 echo "✨ ¡Éxito! El instalador DMG está en:"
 echo "👉 ./${APP_NAME}.dmg"
 echo ""
-echo "ℹ️  Recuerda decirle a quien instale la app que, después de copiarla a"
-echo "    Applications, ejecute UNA vez en Terminal:"
-echo ""
-echo "    xattr -dr com.apple.quarantine \"/Applications/${APP_NAME}.app\""
+echo "ℹ️  Primera apertura: clic derecho → Abrir (la app vive en la barra de menú,"
+echo "    no en el Dock)."
 echo ""
